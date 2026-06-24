@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
-
 import { api } from '../lib/api';
+// Importamos el escáner de la librería html5-qrcode
+import { Html5QrcodeScanner, Html5QrcodeSupportedFormats } from "html5-qrcode";
 
 export default function TabEjecucion() {
   const [backendError, setBackendError] = useState('');
@@ -18,6 +19,10 @@ export default function TabEjecucion() {
 
   const [manualCatalog, setManualCatalog] = useState([]);
   const [loading, setLoading] = useState(false);
+
+  // NUEVOS ESTADOS: Crear toma personalizada y Escáner de Cámara Teléfono
+  const [nuevoNombreToma, setNuevoNombreToma] = useState('');
+  const [mostrarEscaner, setMostrarEscaner] = useState(false);
 
   // MODAL DE CONTINGENCIA MANUAL
   const [showModalManual, setShowModalManual] = useState(false);
@@ -147,6 +152,43 @@ export default function TabEjecucion() {
     setProductoPreSeleccionado(null);
   }, [idZonaActiva]);
 
+  // EFFECT 4: LÓGICA Y ASIGNACIÓN DEL ESCÁNER DE CÁMARA
+  useEffect(() => {
+    if (mostrarEscaner) {
+      // Configuramos compatibilidad explícita con códigos de barras de productos
+      const formatsToSupport = [
+        Html5QrcodeSupportedFormats.EAN_13,
+        Html5QrcodeSupportedFormats.EAN_8,
+        Html5QrcodeSupportedFormats.CODE_128,
+        Html5QrcodeSupportedFormats.CODE_39,
+        Html5QrcodeSupportedFormats.QR_CODE
+      ];
+
+      const scanner = new Html5QrcodeScanner("reader-cam", {
+        fps: 10,
+        qrbox: { width: 260, height: 140 },
+        formatsToSupport: formatsToSupport
+      });
+
+      scanner.render(
+        (decodedText) => {
+          setCodigo(decodedText);
+          setMostrarEscaner(false);
+          scanner.clear();
+          // Lanza inmediatamente la verificación en cascada del producto detectado
+          validarYMostrarProducto(decodedText);
+        },
+        (error) => {
+          // Captura silenciosa de ciclos de búsqueda de foco de la cámara
+        }
+      );
+
+      return () => {
+        scanner.clear().catch(err => console.error("Error apagando cámara:", err));
+      };
+    }
+  }, [mostrarEscaner]);
+
   // FILTRADO DE SEGURIDAD
   const zonasDisponiblesParaContar = useMemo(() => {
     return zonas.filter((z) => z.estado !== 'CERRADA');
@@ -162,11 +204,14 @@ export default function TabEjecucion() {
     setScanError('');
     setBackendError('');
     try {
-      const { data } = await api.post('/api/tomas');
+      // Si tienes un payload con nombre, puedes pasarlo, o dejarlo por defecto si el backend no lo requiere todavía
+      const payload = nuevoNombreToma.trim() ? { nombre: nuevoNombreToma.trim() } : {};
+      const { data } = await api.post('/api/tomas', payload);
       const idM = String(data?.id_madre ?? '');
       setIdMadre(idM);
       await api.post(`/api/tomas/${idM}/abrir`).catch(() => {});
       await refreshTomasExistentes();
+      setNuevoNombreToma('');
     } catch (e) {
       setScanError('Error al crear la toma madre.');
     } finally {
@@ -254,6 +299,7 @@ export default function TabEjecucion() {
     try {
       await api.post(`/api/zonas/${idZonaActiva}/conteos`, {
         codigo_barras: productoPreSeleccionado.codigo_barras,
+        amount_fisica_contada: cantidad, // Ajusta si tu backend usa cantidad_fisica_contada
         cantidad_fisica_contada: cantidad,
       });
 
@@ -316,15 +362,37 @@ export default function TabEjecucion() {
 
       <div className="grid grid-cols-1 gap-3">
         {/* Control de toma */}
-        <div className="rounded-xl border p-3 bg-white">
-          <div className="text-sm font-semibold">Control de toma</div>
+        <div className="rounded-xl border p-3 bg-white space-y-3">
+          <div className="text-sm font-semibold text-slate-900 border-b pb-1">Control de toma</div>
 
-          <div className="mt-3 grid grid-cols-1 gap-3">
+          {/* PARTE A: CREACIÓN INDEPENDIENTE DE LA TOMA (NUEVO ENFOQUE DE PROCESO) */}
+          <div className="bg-indigo-50/50 rounded-lg p-2.5 border border-indigo-100">
+            <label className="text-xs font-bold text-indigo-900">1. Crear Nueva Toma de Inventario</label>
+            <div className="mt-1 flex gap-2">
+              <input
+                className="flex-1 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm focus:border-indigo-500 focus:outline-none"
+                value={nuevoNombreToma}
+                onChange={(e) => setNuevoNombreToma(e.target.value)}
+                placeholder="Ej: Auditoría Junio Bloque A"
+              />
+              <button
+                type="button"
+                className="px-4 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold transition-colors disabled:opacity-50"
+                disabled={loading}
+                onClick={crearMadre}
+              >
+                {loading ? 'Creando...' : 'Crear Toma'}
+              </button>
+            </div>
+          </div>
+
+          {/* PARTE B: SELECCIÓN Y APERTURA DE ZONA */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
             <div>
-              <label className="text-xs text-slate-500">Seleccionar Toma Existente o Ingresar ID</label>
+              <label className="text-xs text-slate-500 font-medium">2. Seleccionar Toma Existente o Ingresar ID</label>
               <div className="mt-1 flex gap-2">
                 <select
-                  className="w-full rounded-lg border px-3 py-2 text-sm bg-white"
+                  className="w-full rounded-lg border px-3 py-2 text-sm bg-white border-slate-300"
                   value={idMadre || ""} 
                   onChange={(e) => setIdMadre(e.target.value)}
                 >
@@ -336,57 +404,48 @@ export default function TabEjecucion() {
                   ))}
                 </select>
                 <input
-                  className="w-1/2 rounded-lg border px-3 py-2 text-sm"
+                  className="w-1/3 rounded-lg border px-3 py-2 text-sm text-center font-mono border-slate-300"
                   value={idMadre}
                   onChange={(e) => setIdMadre(e.target.value)}
-                  placeholder="O digita ID"
+                  placeholder="ID"
                 />
               </div>
             </div>
 
-            <div className="flex gap-2">
-              <button
-                type="button"
-                className="flex-1 px-3 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold disabled:opacity-50"
-                disabled={loading}
-                onClick={crearMadre}
-              >
-                {loading ? 'Creando...' : 'Crear Toma'}
-              </button>
-
-              <button
-                type="button"
-                className="flex-1 px-3 py-2 rounded-lg bg-emerald-600 text-white text-sm font-semibold disabled:opacity-50"
-                disabled={loading || !zonaNombre.trim() || !idMadre.trim()}
-                onClick={crearZona}
-              >
-                {loading ? 'Creando zona...' : 'Crear Zona'}
-              </button>
-            </div>
-
             <div>
-              <label className="text-xs text-slate-500">Nueva zona (nombre)</label>
-              <input
-                className="mt-1 w-full rounded-lg border px-3 py-2 text-sm"
-                value={zonaNombre}
-                onChange={(e) => setZonaNombre(e.target.value)}
-              />
+              <label className="text-xs text-slate-500 font-medium">3. Crear Zona dentro de la Toma Seleccionada</label>
+              <div className="mt-1 flex gap-2">
+                <input
+                  className="flex-1 rounded-lg border px-3 py-2 text-sm border-slate-300"
+                  value={zonaNombre}
+                  onChange={(e) => setZonaNombre(e.target.value)}
+                  placeholder="Nombre de la zona"
+                />
+                <button
+                  type="button"
+                  className="px-3 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition-colors disabled:opacity-50"
+                  disabled={loading || !zonaNombre.trim() || !idMadre.trim()}
+                  onClick={crearZona}
+                >
+                  {loading ? 'Abriendo...' : '+ Zona'}
+                </button>
+              </div>
             </div>
-
-            {!!scanError && <div className="text-sm text-red-600 font-medium">{scanError}</div>}
           </div>
+
+          {!!scanError && <div className="text-xs text-red-600 font-bold bg-red-50 p-2 rounded-md border border-red-200">{scanError}</div>}
         </div>
 
         {/* Zona activa */}
         <div className="rounded-xl border p-3 bg-white">
-          <div className="text-sm font-semibold">Zona activa</div>
+          <div className="text-sm font-semibold">Zona activa para Auditoría</div>
           <div className="mt-2">
             <select
-              className="w-full rounded-lg border px-3 py-2 text-sm bg-white"
+              className="w-full rounded-lg border px-3 py-2 text-sm bg-white border-slate-300"
               value={idZonaActiva || ""}
               onChange={(e) => setIdZonaActiva(e.target.value)}
             >
-              <option value="">Selecciona una zona disponible...</option>
+              <option value="">Selecciona la zona donde vas a contar...</option>
               {Array.isArray(zonasDisponiblesParaContar) && zonasDisponiblesParaContar.map((zona) => (
                 <option key={zona.id} value={zona.id}>
                   {zona.nombre || `Zona ${zona.id}`}
@@ -395,16 +454,16 @@ export default function TabEjecucion() {
             </select>
           </div>
           <div className="mt-2 text-xs text-slate-600">
-            Zona activa: <span className="font-semibold">{idZonaActiva || '—'}</span>
+            Trabajando en la Zona ID: <span className="font-mono bg-slate-100 px-1.5 py-0.5 rounded text-indigo-700 font-bold">{idZonaActiva || 'Ninguna'}</span>
           </div>
         </div>
 
         {/* Panel de Captura Operario (Flujo de Dos Pasos) */}
         <div className={`rounded-xl border p-3 bg-white relative ${esZonaCerrada ? "opacity-60 pointer-events-none bg-slate-50" : ""}`}>
-          <div className="flex justify-between items-center">
-            <div className="text-sm font-semibold">Panel de Captura Operario</div>
+          <div className="flex justify-between items-center flex-wrap gap-1">
+            <div className="text-sm font-semibold text-slate-900">Panel de Captura Operario</div>
             <span className="text-[10px] text-indigo-600 font-bold bg-indigo-50 px-2 py-0.5 rounded">
-              💡 Doble Clic en el buscador para filtrar por Nombre
+              💡 Doble Clic en el input para desplegar catálogo completo
             </span>
           </div>
 
@@ -416,11 +475,11 @@ export default function TabEjecucion() {
 
           <div className="mt-3 grid grid-cols-1 gap-3">
             <div>
-              <div className="rounded-lg border bg-slate-50 p-3">
+              <div className="rounded-lg border bg-slate-50 p-3 shadow-sm">
                 
-                {/* PASO 1: LEER CÓDIGO */}
-                <div className="text-xs text-slate-500 font-medium">1) Ingrese Código de Barras o Referencia:</div>
-                <div className="flex gap-2 mt-1">
+                {/* PASO 1: LEER CÓDIGO CON TECLADO TÁCTIL O CÁMARA */}
+                <div className="text-xs text-slate-600 font-bold">1) Ingrese Código de Barras o Referencia:</div>
+                <div className="flex gap-2 mt-1.5">
                   <input
                     className="flex-1 rounded-lg border px-3 py-2 text-sm font-mono border-slate-300 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
                     value={codigo}
@@ -428,17 +487,45 @@ export default function TabEjecucion() {
                     onKeyDown={handleKeyDownBuscador}
                     onDoubleClick={() => !esZonaCerrada && idZonaActiva && setShowModalManual(true)}
                     disabled={esZonaCerrada || !idZonaActiva}
-                    placeholder="Escanee o escriba ref + ENTER..."
+                    placeholder="Escanee, digite o use 📷..."
+                    type="text"
+                    inputMode="alphanumeric" // Habilita de forma nativa el teclado del celular al enfocarse
                   />
+                  
+                  {/* BOTÓN 📷 ESCÁNER REMOTO (MÓVIL) */}
                   <button
                     type="button"
-                    className="px-3 py-2 bg-indigo-600 text-white rounded-lg text-xs font-bold hover:bg-indigo-700"
+                    title="Escanear con la cámara del celular"
+                    className={`px-3 py-2 rounded-lg text-sm font-bold border transition-all ${mostrarEscaner ? 'bg-amber-500 text-white border-amber-600' : 'bg-slate-200 hover:bg-slate-300 text-slate-800 border-slate-300'}`}
+                    disabled={esZonaCerrada || !idZonaActiva}
+                    onClick={() => setMostrarEscaner(!mostrarEscaner)}
+                  >
+                    {mostrarEscaner ? '✕' : '📷'}
+                  </button>
+
+                  <button
+                    type="button"
+                    className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-xs font-bold hover:bg-indigo-700 shadow-sm"
                     disabled={!codigo.trim() || esZonaCerrada || !idZonaActiva}
                     onClick={() => validarYMostrarProducto(codigo)}
                   >
                     Validar
                   </button>
                 </div>
+
+                {/* VISUALIZADOR DE CÁMARA EN VIVO */}
+                {mostrarEscaner && (
+                  <div className="mt-3 p-2 bg-white rounded-lg border-2 border-indigo-400 animate-in fade-in duration-150">
+                    <div id="reader-cam" className="w-full overflow-hidden rounded-md"></div>
+                    <button 
+                      type="button"
+                      onClick={() => setMostrarEscaner(false)}
+                      className="mt-2 w-full bg-slate-600 hover:bg-slate-700 text-white text-xs py-1.5 rounded font-bold"
+                    >
+                      Apagar Cámara
+                    </button>
+                  </div>
+                )}
 
                 {/* VISUALIZACIÓN EN PANTALLA ANTES DE CONFIRMAR LA CANTIDAD */}
                 {productoPreSeleccionado && (
@@ -459,7 +546,7 @@ export default function TabEjecucion() {
                   <div>
                     <label className="text-xs text-slate-500 font-medium">2) Cantidad física:</label>
                     <input
-                      className="mt-1 w-full rounded-lg border px-3 py-2 text-sm"
+                      className="mt-1 w-full rounded-lg border px-3 py-2 text-sm border-slate-300"
                       type="number"
                       min={1}
                       disabled={esZonaCerrada || !idZonaActiva || !productoPreSeleccionado}
