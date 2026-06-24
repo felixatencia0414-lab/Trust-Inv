@@ -59,6 +59,7 @@ class InventarioValorizado(SQLModel, table=True):
 
 class TomaInventarioMadre(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
+    nombre: str = Field(nullable=False, max_length=255)  # <-- TIENES QUE AGREGAR ESTA
     fecha_creacion: datetime = Field(default_factory=datetime.utcnow, nullable=False)
     estado: str = Field(nullable=False, index=True, max_length=20)
 
