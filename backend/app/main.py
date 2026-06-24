@@ -14,10 +14,18 @@ from .routers.auditoria import router as auditoria_router
 
 app = FastAPI(title="Toma de Inventarios API", version="0.1.0")
 
-# CORS CONFIGURATION: Permitimos todos los orígenes ("*") para pruebas desde dispositivos móviles
+# Lista explícita de dominios permitidos para evitar conflictos de seguridad con allow_credentials=True
+origins = [
+    "https://trust-inv-1.onrender.com",   # URL de tu Frontend en Render
+    "https://trust-inv-app.onrender.com", # Por si acaso configuraste el otro nombre de dominio
+    "http://localhost:5173",              # Tu entorno de desarrollo local con Vite
+    "http://localhost:3000",              # Alternativa local común
+]
+
+# Configuración de CORS segura
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
