@@ -12,12 +12,17 @@ os.environ["PGCLIENTENCODING"] = "utf-8"
 # 1. Intentamos leer la URL directa completa (ideal para Supabase/Render en la nube)
 DATABASE_URL_DIRECT = os.getenv("DATABASE_URL")
 
+# ... (Tu código inicial de imports y lectura de DATABASE_URL_DIRECT se queda igual)
+
 if DATABASE_URL_DIRECT:
-    # Si Render nos da la URL completa de Supabase, la usamos directamente.
-    # Limpiamos posibles comillas accidentales que se copien del portapapeles
     DATABASE_URL_DIRECT = DATABASE_URL_DIRECT.strip('"').strip("'")
     
-    # Se reemplaza postgresql:// por postgresql+psycopg2:// para usar el driver correcto en Python
+    # 1. Si trae el parámetro de pgbouncer, lo removemos de la URL para que psycopg2 no falle
+    if "?pgbouncer=true" in DATABASE_URL_DIRECT:
+        DATABASE_URL_DIRECT = DATABASE_URL_DIRECT.replace("?pgbouncer=true", "")
+    elif "&pgbouncer=true" in DATABASE_URL_DIRECT:
+        DATABASE_URL_DIRECT = DATABASE_URL_DIRECT.replace("&pgbouncer=true", "")
+
     if DATABASE_URL_DIRECT.startswith("postgresql://"):
         DATABASE_URL = DATABASE_URL_DIRECT.replace("postgresql://", "postgresql+psycopg2://", 1)
     else:
@@ -38,15 +43,24 @@ else:
         f"@{DB_HOST}:{DB_PORT}/{DB_NAME}"
     )
 
-# Configuración del motor de la base de datos optimizado para la nube y PgBouncer
+# Argumentos de conexión específicos para que no interfieran en local
+connect_args = {}
+if DATABASE_URL_DIRECT:
+    # Le pasamos los parámetros de preparación de consultas requeridos por el Pooler de Supabase
+    connect_args = {"prepare_threshold": 0}
+
+# Configuración segura del motor
 engine = create_engine(
     DATABASE_URL,
     echo=False,
-    pool_pre_ping=True,      # Verifica que la conexión esté viva antes de usarla (evita caídas)
-    pool_recycle=1800,       # Recicla las conexiones cada 30 minutos
-    pool_size=5,             # Tamaño del pool adecuado para planes compartidos
-    max_overflow=10,         # Conexiones adicionales permitidas en picos de tráfico
+    pool_pre_ping=True,
+    pool_recycle=1800,
+    pool_size=5,
+    max_overflow=10,
+    connect_args=connect_args, # Inyección limpia de argumentos para producción
 )
+
+# ... (Tus funciones get_session e init_db se quedan exactamente igual abajo)
 
 def get_session() -> Generator[Session, None, None]:
     with Session(engine) as session:
