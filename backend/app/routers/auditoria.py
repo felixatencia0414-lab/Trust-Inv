@@ -16,8 +16,47 @@ from app.models import (
     TomaInventarioMadre,
     ZonaInventario,
 )
+from pydantic import BaseModel
+from typing import Optional
 
 router = APIRouter(prefix="/api", tags=["auditoria"])
+
+# 1. Esquema para recibir la petición del frontend (aunque el modelo no guarde nombre, evita errores si el JSON lo envía)
+class TomaCreate(BaseModel):
+    nombre: Optional[str] = None
+
+
+# 2. Endpoint POST para registrar la Toma Madre
+@router.post("/tomas")
+def crear_toma_madre(payload: TomaCreate, session: Session = Depends(get_session)) -> dict:
+    """Crea una nueva Toma Madre utilizando el modelo físico sin columna de nombre."""
+    try:
+        # Instanciamos usando únicamente las columnas reales de tu SQLModel
+        nueva_toma = TomaInventarioMadre(
+            estado="CREADA"  # Mantiene consistencia con tus filtros de auditoría
+            # fecha_creacion se genera automáticamente con datetime.utcnow gracias al default_factory
+        )
+        
+        session.add(nueva_toma)
+        session.commit()
+        session.refresh(nueva_toma)
+        
+        # Le respondemos al frontend mapeando el ID como 'id_madre' para que React no se rompa
+        return {
+            "status": "ok",
+            "id_madre": nueva_toma.id,
+            "nombre": payload.nombre or f"Toma #{nueva_toma.id}", # Frontend visual
+            "estado": nueva_toma.estado
+        }
+        
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error al inicializar la toma madre en la base de datos: {str(e)}"
+        )
+
+
 
 
 def _require_madre(session: Session, id_madre: int) -> TomaInventarioMadre:
