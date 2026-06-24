@@ -44,21 +44,22 @@ else:
     )
 
 # Argumentos de conexión específicos para que no interfieran en local
-connect_args = {}
-if DATABASE_URL_DIRECT:
-    # Le pasamos los parámetros de preparación de consultas requeridos por el Pooler de Supabase
-    connect_args = {"prepare_threshold": 0}
+# ... (Tu código inicial de procesamiento de URLs se queda exactamente igual)
 
-# Configuración segura del motor
+# Dejamos connect_args completamente vacío para evitar que psycopg2 arroje errores de DSN inválidos
+connect_args = {}
+
+# Configuración limpia y compatible del motor
 engine = create_engine(
     DATABASE_URL,
     echo=False,
-    pool_pre_ping=True,
-    pool_recycle=1800,
+    pool_pre_ping=True,  # Crucial para verificar que las conexiones a Supabase sigan vivas
+    pool_recycle=1800,   # Recicla conexiones caídas automáticamente cada 30 minutos
     pool_size=5,
     max_overflow=10,
-    connect_args=connect_args, # Inyección limpia de argumentos para producción
+    connect_args=connect_args,
 )
+
 
 # ... (Tus funciones get_session e init_db se quedan exactamente igual abajo)
 
