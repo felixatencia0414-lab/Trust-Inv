@@ -1,7 +1,7 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState, useRef } from 'react';
 import { api } from '../lib/api';
-// Importamos el escáner de la librería html5-qrcode
-import { Html5QrcodeScanner, Html5QrcodeSupportedFormats } from "html5-qrcode";
+// Importamos el motor puro (Html5Qrcode) para control total del hardware
+import { Html5Qrcode, Html5QrcodeSupportedFormats } from "html5-qrcode";
 
 export default function TabEjecucion() {
   const [backendError, setBackendError] = useState('');
@@ -31,6 +31,10 @@ export default function TabEjecucion() {
   // NUEVO ESTADO: Almacena el producto validado que está en espera de que le ingresen la cantidad
   const [productoPreSeleccionado, setProductoPreSeleccionado] = useState(null);
 
+  // REFERENCIAS DE HARDWARE Y ENFOQUE
+  const qrCodeInstanceRef = useRef(null);
+  const cantidadInputRef = useRef(null);
+
   // 1. CARGA DE CATÁLOGO E HISTÓRICOS DE BASE DE DATOS
   const refreshManualCatalogFromProductos = async () => {
     try {
@@ -57,8 +61,6 @@ export default function TabEjecucion() {
   const refreshTomasExistentes = async () => {
     try {
       const { data } = await api.get('/api/api/tomas');
-      console.log("Datos exitosos desde Swagger:", data);
-      
       if (Array.isArray(data)) {
         setTomas(data);
       } else {
@@ -77,8 +79,6 @@ export default function TabEjecucion() {
     }
     try {
       const { data } = await api.get(`/api/api/tomas/${idTomaMadre}/zonas`);
-      console.log("Zonas cargadas desde la API unificada:", data);
-      
       if (Array.isArray(data)) {
         setZonas(data);
       } else {
@@ -97,8 +97,6 @@ export default function TabEjecucion() {
     }
     try {
       const { data } = await api.get(`/api/zonas/${idZona}/conteos`);
-      console.log("📦 Estructura completa recibida del servidor:", data);
-      
       if (data && Array.isArray(data.items)) {
         setItemsZona(data.items); 
       } else if (Array.isArray(data)) {
@@ -152,42 +150,69 @@ export default function TabEjecucion() {
     setProductoPreSeleccionado(null);
   }, [idZonaActiva]);
 
-  // EFFECT 4: LÓGICA Y ASIGNACIÓN DEL ESCÁNER DE CÁMARA
+  // EFFECT 4: LÓGICA ULTRA-PRO DE ESCÁNER POR CÁMARA (SIN MODALES INTERMEDIOS)
   useEffect(() => {
     if (mostrarEscaner) {
-      // Configuramos compatibilidad explícita con códigos de barras de productos
+      // Configuramos compatibilidad explícita y exclusiva con códigos de barras lineales (1D)
       const formatsToSupport = [
         Html5QrcodeSupportedFormats.EAN_13,
         Html5QrcodeSupportedFormats.EAN_8,
         Html5QrcodeSupportedFormats.CODE_128,
         Html5QrcodeSupportedFormats.CODE_39,
-        Html5QrcodeSupportedFormats.QR_CODE
+        Html5QrcodeSupportedFormats.UPC_A,
+        Html5QrcodeSupportedFormats.UPC_E
       ];
 
-      const scanner = new Html5QrcodeScanner("reader-cam", {
-        fps: 10,
-        qrbox: { width: 260, height: 140 },
+      // Inicializamos el lector mapeado al ID del contenedor div 'reader-cam'
+      const html5QrcodeScanner = new Html5Qrcode("reader-cam", {
         formatsToSupport: formatsToSupport
       });
+      qrCodeInstanceRef.current = html5QrcodeScanner;
 
-      scanner.render(
-        (decodedText) => {
-          setCodigo(decodedText);
-          setMostrarEscaner(false);
-          scanner.clear();
-          // Lanza inmediatamente la verificación en cascada del producto detectado
-          validarYMostrarProducto(decodedText);
+      // Arrancamos la cámara trasera de ráfaga continua sin intermediación de interfaces extras
+      html5QrcodeScanner.start(
+        { facingMode: "environment" }, // Forzar cámara trasera nativa
+        {
+          fps: 15,
+          qrbox: { width: 280, height: 130 } // Caja delgada rectangular optimizada para líneas 1D
         },
-        (error) => {
-          // Captura silenciosa de ciclos de búsqueda de foco de la cámara
+        (decodedText) => {
+          // ¡CÓDIGO CAPTURADO!
+          setCodigo(decodedText);
+          setMostrarEscaner(false); // Cierra el visor de la cámara automáticamente
+          
+          // Apagamos hardware
+          html5QrcodeScanner.stop().then(() => {
+            // Disparar validación automática del string capturado
+            validarYMostrarProducto(decodedText);
+          }).catch(err => console.error("Error deteniendo el lente:", err));
+        },
+        (errorMessage) => {
+          // Búsqueda silenciosa frame a frame
         }
-      );
+      ).catch((err) => {
+        console.error("Error al abrir cámara trasera nativa:", err);
+        setScanError("No se pudo acceder de forma directa al lente trasero.");
+        setMostrarEscaner(false);
+      });
 
       return () => {
-        scanner.clear().catch(err => console.error("Error apagando cámara:", err));
+        if (qrCodeInstanceRef.current && qrCodeInstanceRef.current.isScanning) {
+          qrCodeInstanceRef.current.stop().catch(err => console.error("Limpieza errónea:", err));
+        }
       };
     }
   }, [mostrarEscaner]);
+
+  // Auto-enfoque al input de cantidad apenas se valide un producto
+  useEffect(() => {
+    if (productoPreSeleccionado && cantidadInputRef.current) {
+      setTimeout(() => {
+        cantidadInputRef.current.focus();
+        cantidadInputRef.current.select(); // Deja el '1' seleccionado para sobreescribir rápido
+      }, 80);
+    }
+  }, [productoPreSeleccionado]);
 
   // FILTRADO DE SEGURIDAD
   const zonasDisponiblesParaContar = useMemo(() => {
@@ -204,7 +229,6 @@ export default function TabEjecucion() {
     setScanError('');
     setBackendError('');
     try {
-      // Si tienes un payload con nombre, puedes pasarlo, o dejarlo por defecto si el backend no lo requiere todavía
       const payload = nuevoNombreToma.trim() ? { nombre: nuevoNombreToma.trim() } : {};
       const { data } = await api.post('/api/tomas', payload);
       const idM = String(data?.id_madre ?? '');
@@ -243,7 +267,6 @@ export default function TabEjecucion() {
     }
   };
 
-  // PASO 1: BUSCAR Y VALIDAR EL PRODUCTO (SÓLO MUESTRA EN PANTALLA)
   const validarYMostrarProducto = (valorRaw) => {
     const valor = valorRaw ? valorRaw.trim() : '';
     if (!valor) return;
@@ -252,7 +275,6 @@ export default function TabEjecucion() {
     setBackendError('');
     setProductoPreSeleccionado(null);
 
-    // Buscamos coincidencia por código de barras O por referencia exacta
     const productoEncontrado = manualCatalog.find(p => 
       String(p.codigo_barras).trim() === valor || 
       String(p.referencia || '').trim().toLowerCase() === valor.toLowerCase()
@@ -261,7 +283,6 @@ export default function TabEjecucion() {
     if (productoEncontrado) {
       setProductoPreSeleccionado(productoEncontrado);
     } else {
-      // Contingencia: si no está en catálogo, pre-seleccionamos una plantilla genérica con el código digitado
       setProductoPreSeleccionado({ 
         id_producto: null,
         nombre: 'Producto Nuevo / No en Catálogo Local', 
@@ -278,7 +299,6 @@ export default function TabEjecucion() {
     }
   };
 
-  // PASO 2: GUARDAR DEFINITIVAMENTE EL CONTEO EN LA BASE DE DATOS
   const ejecutarGuardadoConteo = async () => {
     if (!idZonaActiva) {
       setBackendError('❌ Selecciona una zona activa primero.');
@@ -299,14 +319,13 @@ export default function TabEjecucion() {
     try {
       await api.post(`/api/zonas/${idZonaActiva}/conteos`, {
         codigo_barras: productoPreSeleccionado.codigo_barras,
-        amount_fisica_contada: cantidad, // Ajusta si tu backend usa cantidad_fisica_contada
+        amount_fisica_contada: cantidad, 
         cantidad_fisica_contada: cantidad,
       });
 
-      // Refrescamos la tabla del listado inferior con los datos del servidor
       await refreshItemsZona(idZonaActiva);
 
-      // Limpiamos los campos del panel de captura para el siguiente registro
+      // Resetear interfaz para dejarla limpia para la siguiente ronda de captura
       setCodigo('');
       setCantidad(1);
       setProductoPreSeleccionado(null);
@@ -337,7 +356,6 @@ export default function TabEjecucion() {
     }
   };
 
-  // Filtrado interno del catálogo para la ventana emergente de búsqueda por Nombre
   const catalogFiltradoModal = useMemo(() => {
     const q = filtroManual.trim().toLowerCase();
     if (!q) return manualCatalog.slice(0, 25);
@@ -365,7 +383,6 @@ export default function TabEjecucion() {
         <div className="rounded-xl border p-3 bg-white space-y-3">
           <div className="text-sm font-semibold text-slate-900 border-b pb-1">Control de toma</div>
 
-          {/* PARTE A: CREACIÓN INDEPENDIENTE DE LA TOMA (NUEVO ENFOQUE DE PROCESO) */}
           <div className="bg-indigo-50/50 rounded-lg p-2.5 border border-indigo-100">
             <label className="text-xs font-bold text-indigo-900">1. Crear Nueva Toma de Inventario</label>
             <div className="mt-1 flex gap-2">
@@ -386,7 +403,6 @@ export default function TabEjecucion() {
             </div>
           </div>
 
-          {/* PARTE B: SELECCIÓN Y APERTURA DE ZONA */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1">
             <div>
               <label className="text-xs text-slate-500 font-medium">2. Seleccionar Toma Existente o Ingresar ID</label>
@@ -399,7 +415,7 @@ export default function TabEjecucion() {
                   <option value="">-- Elige una Toma --</option>
                   {Array.isArray(tomas) && tomas.map((toma) => (
                     <option key={toma.id} value={toma.id}>
-                      Toma # {toma.id} ({toma.estado || 'CREADA'})
+                      Toma # {toma.id} {toma.nombre ? `- ${toma.nombre}` : ''} ({toma.estado || 'CREADA'})
                     </option>
                   ))}
                 </select>
@@ -458,7 +474,7 @@ export default function TabEjecucion() {
           </div>
         </div>
 
-        {/* Panel de Captura Operario (Flujo de Dos Pasos) */}
+        {/* Panel de Captura Operario */}
         <div className={`rounded-xl border p-3 bg-white relative ${esZonaCerrada ? "opacity-60 pointer-events-none bg-slate-50" : ""}`}>
           <div className="flex justify-between items-center flex-wrap gap-1">
             <div className="text-sm font-semibold text-slate-900">Panel de Captura Operario</div>
@@ -477,11 +493,11 @@ export default function TabEjecucion() {
             <div>
               <div className="rounded-lg border bg-slate-50 p-3 shadow-sm">
                 
-                {/* PASO 1: LEER CÓDIGO CON TECLADO TÁCTIL O CÁMARA */}
+                {/* PASO 1: LEER CÓDIGO */}
                 <div className="text-xs text-slate-600 font-bold">1) Ingrese Código de Barras o Referencia:</div>
                 <div className="flex gap-2 mt-1.5">
                   <input
-                    className="flex-1 rounded-lg border px-3 py-2 text-sm font-mono border-slate-300 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
+                    className="flex-1 rounded-lg border px-3 py-2 text-sm font-mono border-slate-300 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 bg-white"
                     value={codigo}
                     onChange={(e) => setCodigo(e.target.value)}
                     onKeyDown={handleKeyDownBuscador}
@@ -489,14 +505,14 @@ export default function TabEjecucion() {
                     disabled={esZonaCerrada || !idZonaActiva}
                     placeholder="Escanee, digite o use 📷..."
                     type="text"
-                    inputMode="alphanumeric" // Habilita de forma nativa el teclado del celular al enfocarse
+                    inputMode="alphanumeric"
                   />
                   
-                  {/* BOTÓN 📷 ESCÁNER REMOTO (MÓVIL) */}
+                  {/* BOTÓN NATIVO CAMARA HILADO FINO */}
                   <button
                     type="button"
-                    title="Escanear con la cámara del celular"
-                    className={`px-3 py-2 rounded-lg text-sm font-bold border transition-all ${mostrarEscaner ? 'bg-amber-500 text-white border-amber-600' : 'bg-slate-200 hover:bg-slate-300 text-slate-800 border-slate-300'}`}
+                    title="Escanear de ráfaga con la cámara del celular"
+                    className={`px-3 py-2 rounded-lg text-sm font-bold border transition-all ${mostrarEscaner ? 'bg-red-500 text-white border-red-600' : 'bg-indigo-600 hover:bg-indigo-700 text-white border-indigo-600'}`}
                     disabled={esZonaCerrada || !idZonaActiva}
                     onClick={() => setMostrarEscaner(!mostrarEscaner)}
                   >
@@ -505,7 +521,7 @@ export default function TabEjecucion() {
 
                   <button
                     type="button"
-                    className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-xs font-bold hover:bg-indigo-700 shadow-sm"
+                    className="px-4 py-2 bg-slate-700 text-white rounded-lg text-xs font-bold hover:bg-slate-800 shadow-sm"
                     disabled={!codigo.trim() || esZonaCerrada || !idZonaActiva}
                     onClick={() => validarYMostrarProducto(codigo)}
                   >
@@ -513,26 +529,21 @@ export default function TabEjecucion() {
                   </button>
                 </div>
 
-                {/* VISUALIZADOR DE CÁMARA EN VIVO */}
+                {/* CONTENEDOR PASIVO NATIVO DE VIDEO (NUNCA ABRE MODAL ARCHIVO) */}
                 {mostrarEscaner && (
-                  <div className="mt-3 p-2 bg-white rounded-lg border-2 border-indigo-400 animate-in fade-in duration-150">
-                    <div id="reader-cam" className="w-full overflow-hidden rounded-md"></div>
-                    <button 
-                      type="button"
-                      onClick={() => setMostrarEscaner(false)}
-                      className="mt-2 w-full bg-slate-600 hover:bg-slate-700 text-white text-xs py-1.5 rounded font-bold"
-                    >
-                      Apagar Cámara
-                    </button>
+                  <div className="mt-3 p-2 bg-black rounded-xl border-2 border-indigo-500 overflow-hidden relative shadow-inner">
+                    <div id="reader-cam" className="w-full overflow-hidden rounded-lg bg-black"></div>
+                    {/* Línea roja decorativa emulando láser industrial */}
+                    <div className="absolute top-1/2 left-0 w-full h-0.5 bg-red-500 shadow-[0_0_8px_rgba(239,68,68,1)] animate-pulse"></div>
                   </div>
                 )}
 
-                {/* VISUALIZACIÓN EN PANTALLA ANTES DE CONFIRMAR LA CANTIDAD */}
+                {/* VISUALIZACIÓN PRE-SELECCIÓN */}
                 {productoPreSeleccionado && (
-                  <div className="mt-3 p-3 rounded-lg bg-indigo-50/70 border border-indigo-200 flex items-start gap-2.5">
+                  <div className="mt-3 p-3 rounded-lg bg-indigo-50/70 border border-indigo-200 flex items-start gap-2.5 animate-in slide-in-from-top-1 duration-100">
                     <div className="text-indigo-600 text-lg mt-0.5">👁️</div>
                     <div className="text-xs flex-1">
-                      <span className="font-extrabold text-indigo-900 block tracking-wider text-[10px]">PRODUCTO IDENTIFICADO (VALIDAR):</span>
+                      <span className="font-extrabold text-indigo-900 block tracking-wider text-[10px]">PRODUCTO IDENTIFICADO:</span>
                       <span className="font-bold text-slate-900 text-sm block mt-0.5">{productoPreSeleccionado.nombre}</span>
                       <span className="text-slate-600 text-[11px] mt-0.5 block font-medium">
                         Ref: {productoPreSeleccionado.referencia || '—'} | Cód: {productoPreSeleccionado.codigo_barras}
@@ -541,12 +552,13 @@ export default function TabEjecucion() {
                   </div>
                 )}
 
-                {/* PASO 2: INGRESAR CANTIDAD Y GUARDAR */}
+                {/* PASO 2: CANTIDAD Y FOCO AUTOMÁTICO */}
                 <div className="mt-4 pt-3 border-t border-slate-200 grid grid-cols-2 gap-2">
                   <div>
                     <label className="text-xs text-slate-500 font-medium">2) Cantidad física:</label>
                     <input
-                      className="mt-1 w-full rounded-lg border px-3 py-2 text-sm border-slate-300"
+                      ref={cantidadInputRef} // Permite el foco forzado por JS
+                      className="mt-1 w-full rounded-lg border px-3 py-2 text-sm border-slate-300 font-bold text-slate-900 focus:border-indigo-500 focus:ring-indigo-500 text-center bg-white"
                       type="number"
                       min={1}
                       disabled={esZonaCerrada || !idZonaActiva || !productoPreSeleccionado}
@@ -558,11 +570,11 @@ export default function TabEjecucion() {
                   <div className="flex items-end justify-end">
                     <button
                       type="button"
-                      className="w-full px-3 py-2 rounded-lg bg-emerald-600 text-white text-sm font-bold disabled:opacity-50 hover:bg-emerald-700 transition-colors shadow-sm"
+                      className="w-full px-3 py-2 rounded-lg bg-emerald-600 text-white text-sm font-bold disabled:opacity-50 hover:bg-emerald-700 transition-colors shadow-sm uppercase tracking-wide text-xs"
                       disabled={!productoPreSeleccionado || cantidad <= 0 || loading || !idZonaActiva || esZonaCerrada}
                       onClick={ejecutarGuardadoConteo}
                     >
-                      {loading ? 'Registrando...' : '✓ Registrar conteo'}
+                      {loading ? 'Registrando...' : '✓ Confirmar (Enter)'}
                     </button>
                   </div>
                 </div>
@@ -647,12 +659,10 @@ export default function TabEjecucion() {
         </div>
       </div>
 
-      {/* MODAL EMERGENTE DE CONTINGENCIA MANUAL (TAILWIND) */}
+      {/* MODAL EMERGENTE DE CONTINGENCIA MANUAL */}
       {showModalManual && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black bg-opacity-60 transition-opacity">
           <div className="bg-white rounded-xl shadow-2xl max-w-lg w-full max-h-[80vh] flex flex-col border border-slate-200 animate-in fade-in zoom-in-95 duration-150">
-            
-            {/* Header */}
             <div className="p-3.5 bg-indigo-600 text-white rounded-t-xl flex justify-between items-center">
               <h3 className="text-sm font-bold flex items-center gap-1.5">
                 <span>🔍</span> Contingencia Manual (Buscador del Catálogo)
@@ -666,12 +676,11 @@ export default function TabEjecucion() {
               </button>
             </div>
 
-            {/* Input Filtro */}
             <div className="p-3 bg-slate-50 border-b border-slate-200">
               <label className="text-xs font-semibold text-slate-600 block mb-1">Filtrar por Nombre, Código o Referencia:</label>
               <input 
                 type="text"
-                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
+                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 bg-white"
                 placeholder="Escribe palabras clave para filtrar..."
                 value={filtroManual}
                 onChange={(e) => setFiltroManual(e.target.value)}
@@ -679,7 +688,6 @@ export default function TabEjecucion() {
               />
             </div>
 
-            {/* Listado de Resultados */}
             <div className="flex-1 overflow-y-auto p-2 divide-y divide-slate-100">
               {catalogFiltradoModal.map((prod) => (
                 <div 
@@ -714,7 +722,6 @@ export default function TabEjecucion() {
               )}
             </div>
 
-            {/* Footer */}
             <div className="p-2 bg-slate-50 rounded-b-xl border-t border-slate-200 flex justify-end">
               <button 
                 type="button" 
