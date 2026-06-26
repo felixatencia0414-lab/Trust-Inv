@@ -265,6 +265,15 @@ export default function TabEjecucion() {
     return zonaActual?.estado === 'CERRADA';
   }, [zonas, idZonaActiva]);
 
+  const zonaActiva = useMemo(() => {
+    return zonas.find(z => String(z.id) === String(idZonaActiva));
+  }, [zonas, idZonaActiva]);
+
+  const isZonaAbierta = useMemo(() => {
+    return zonaActiva?.estado === 'ABIERTA';
+  }, [zonaActiva]);
+
+
   const crearMadre = async () => {
     setLoading(true);
     setScanError('');
@@ -406,6 +415,66 @@ export default function TabEjecucion() {
       String(p.codigo_barras || '').toLowerCase().includes(q)
     );
   }, [manualCatalog, filtroManual]);
+
+  const [editingId, setEditingId] = useState(null);
+  const [editCantidad, setEditCantidad] = useState('');
+
+
+  const handleUpdateCantidad = async (itemId, nuevaCantidad) => {
+    console.log("🚀 [CLICK DETECTADO] Actualizar:", itemId, nuevaCantidad);
+    const id = Number(itemId);
+    const cantidadNum = Number(nuevaCantidad);
+
+    if (!id || !Number.isFinite(id)) return;
+    if (!Number.isFinite(cantidadNum) || cantidadNum < 0) return;
+    if (zonaActiva?.estado !== 'ABIERTA') return;
+
+    setBackendError('');
+    setLoading(true); // <-- Corregido con minúscula para evitar el ReferenceError
+    setScanError('');
+    try {
+      console.log(`🚀 [FRONTEND] Enviando PATCH -> /api/zonas/${idZonaActiva}/conteos?id_producto=${itemId}`);
+      
+      // OPCIÓN 1: id_producto como Query Parameter
+      await api.patch(`/api/zonas/${idZonaActiva}/conteos?id_producto=${itemId}`, {
+        cantidad_fisica_contada: cantidadNum,
+      });
+
+      await refreshItemsZona(idZonaActiva);
+    } catch (e) {
+      const detail = e?.response?.data?.detail || e?.response?.data || e?.message || 'Error al actualizar cantidad';
+      setBackendError(typeof detail === 'string' ? `❌ ${detail}` : '❌ Error al actualizar cantidad');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleDesagregarProducto = async (itemId) => {
+    console.log("🚀 [FRONTEND] handleDesagregarProducto (DELETE) -> raw itemId:", itemId, typeof itemId);
+    const id = Number(itemId);
+
+    if (!id || !Number.isFinite(id)) return;
+    if (zonaActiva?.estado !== 'ABIERTA') return;
+
+    if (!window.confirm('¿Eliminar este producto del conteo de la zona?')) return;
+
+    setBackendError('');
+    setLoading(true);
+    setScanError('');
+    try {
+      console.log(`🚀 [FRONTEND] Enviando DELETE -> /api/zonas/${idZonaActiva}/conteos?id_producto=${id}`);
+      
+      // OPCIÓN 1: id_producto como Query Parameter
+      await api.delete(`/api/zonas/${idZonaActiva}/conteos?id_producto=${id}`);
+      
+      await refreshItemsZona(idZonaActiva);
+    } catch (e) {
+      const detail = e?.response?.data?.detail || e?.response?.data || e?.message || 'Error al eliminar';
+      setBackendError(typeof detail === 'string' ? `❌ ${detail}` : '❌ Error al eliminar');
+    } finally {
+      setLoading(false);
+    }
+  };
 
   return (
     <section className="px-4 py-4 space-y-3">
@@ -696,15 +765,107 @@ export default function TabEjecucion() {
                   itemsZona
                     .slice()
                     .sort((a, b) => String(a.nombre ?? '').localeCompare(String(b.nombre ?? '')))
-                    .map((it, idx) => (
-                      <tr key={it.id_producto || idx} className="border-b last:border-b-0 hover:bg-slate-50">
-                        <td className="px-3 py-2 font-semibold text-slate-900">{it.nombre || it.producto_nombre || 'Sin nombre'}</td>
-                        <td className="px-3 py-2 text-slate-600">{it.referencia || '—'}</td>
-                        <td className="px-3 py-2 font-mono text-slate-600 break-all">{it.codigo_barras}</td>
-                        <td className="px-3 py-2 font-bold text-center text-indigo-600 text-sm bg-indigo-50/30">{it.cantidad_fisica_contada}</td>
-                      </tr>
-                    ))
+                    .map((it, idx) => {
+                      const itemId = it.id;
+                      const cantidadActual = it.cantidad_contada ?? it.cantidad_fisica_contada ?? it.cantidad ?? 0;
+
+                      return (
+                        <tr key={it.id_conteo || it.id_item || itemId || it.id_producto || idx} className="border-b last:border-b-0 hover:bg-slate-50">
+
+                          <td className="px-3 py-2 font-semibold text-slate-900">{it.nombre || it.producto_nombre || 'Sin nombre'}</td>
+                          <td className="px-3 py-2 text-slate-600">{it.referencia || '—'}</td>
+                          <td className="px-3 py-2 font-mono text-slate-600 break-all">{it.codigo_barras}</td>
+
+                          <td className="px-3 py-2 text-center">
+                            {zonaActiva?.estado === 'ABIERTA' ? (
+                              <div className="flex items-center justify-center gap-2">
+                                {editingId === it.id_producto ? (
+                                  <>
+                                    <input
+                                      type="number"
+                                      min={0}
+                                      id={`qty-${it.id_producto}`}
+                                      className="w-20 rounded-lg border border-slate-300 px-2 py-1 text-xs font-bold"
+                                      value={editCantidad}
+                                      onChange={(e) => {
+                                        setEditCantidad(e.target.value);
+                                      }}
+                                    />
+                                    <button
+                                      type="button"
+                                      className="text-emerald-700 hover:text-emerald-800"
+                                      title="Guardar"
+                                      disabled={loading}
+                                      onClick={async () => {
+                                        await handleUpdateCantidad(it.id_producto, editCantidad);
+                                        setEditingId(null);
+                                        setEditCantidad('');
+                                        await refreshItemsZona(idZonaActiva);
+                                      }}
+                                    >
+                                      💾
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="text-red-700 hover:text-red-800"
+                                      title="Cancelar"
+                                      disabled={loading}
+                                      onClick={() => {
+                                        setEditingId(null);
+                                        setEditCantidad('');
+                                      }}
+                                    >
+                                      ❌
+                                    </button>
+                                  </>
+                                ) : (
+                                  <>
+                                    <span className="font-bold">{cantidadActual}</span>
+                                    <button
+                                      type="button"
+                                      className="text-blue-600 hover:text-blue-700 disabled:opacity-50"
+                                      title="Editar"
+                                      onClick={() => {
+                                        setEditingId(it.id_producto);
+                                        setEditCantidad(String(it.cantidad_fisica_contada ?? it.cantidad_contada ?? it.cantidad ?? 0));
+                                      }}
+                                      disabled={zonaActiva?.estado !== 'ABIERTA'}
+                                    >
+                                      ✏️
+                                    </button>
+                                  </>
+                                )}
+                              </div>
+                            ) : (
+                              <span className="font-bold text-indigo-600 text-sm bg-indigo-50/30 px-2 py-1 rounded">
+                                {cantidadActual}
+                              </span>
+                            )}
+                          </td>
+
+                          {zonaActiva?.estado === 'ABIERTA' ? (
+                            <td className="px-2 py-2 text-right">
+
+                               <button
+                                  type="button"
+                                  className="text-slate-400 hover:text-red-600 disabled:opacity-50"
+                                  title="Desagregar / Eliminar"
+                                  onClick={() => {
+                                    // Esto nos dejará abrir y examinar todas las propiedades reales en la consola
+                                    console.log("🔍 ESTRUCTURA COMPLETA DE LA FILA:", it);
+                                    handleDesagregarProducto(it.id_conteo || it.id_item || it.id_producto);
+                                  }}
+                                >
+                                  🗑️
+                                </button>
+                            </td>
+                          ) : null}
+                        </tr>
+                      );
+                    })
+
                 )}
+
               </tbody>
             </table>
           </div>

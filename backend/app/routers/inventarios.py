@@ -267,6 +267,155 @@ def listar_conteos_zona(id_zona: int, session: Session = Depends(get_session)) -
     return {"status": "ok", "id_zona": zona.id, "nombre_zona": zona.nombre_zona, "items": items}
 
 
+@router.patch("/zonas/{id_zona}/conteos")
+def actualizar_conteo(
+        id_zona: int,
+        id_producto: int,
+        payload: dict,
+        session: Session = Depends(get_session)
+):
+
+   
+    detalle = session.exec(
+
+        select(ConteoZonaDetalle)
+
+        .where(
+            ConteoZonaDetalle.id_zona == id_zona
+        )
+
+        .where(
+            ConteoZonaDetalle.id_producto == id_producto
+        )
+
+    ).first()
+
+
+    if not detalle:
+      
+        raise HTTPException(
+            status_code=404,
+            detail="Conteo no encontrado"
+        )
+
+
+
+    cantidad = payload.get("cantidad_fisica_contada")
+
+
+  
+
+
+    if cantidad is None:
+       
+        raise HTTPException(
+            status_code=400,
+            detail="cantidad_fisica_contada es requerida"
+        )
+
+
+    try:
+
+        cantidad_int = int(cantidad)
+
+    except Exception as e:
+
+        
+        raise HTTPException(
+            status_code=400,
+            detail="cantidad_fisica_contada debe ser int"
+        )
+
+
+    
+
+
+    detalle.cantidad_fisica_contada = cantidad_int
+
+
+    try:
+
+        session.add(detalle)
+
+        session.commit()
+
+        session.refresh(detalle)
+
+        
+
+
+
+    except Exception as e:
+
+
+        session.rollback()
+
+
+        
+
+
+        raise HTTPException(
+            status_code=500,
+            detail=str(e)
+        )
+
+
+
+
+
+    return {
+
+
+        "status": "ok",
+
+        "id_detalle": detalle.id,
+
+        "cantidad_fisica_contada":
+            detalle.cantidad_fisica_contada
+
+    }
+@router.delete("/zonas/{id_zona}/conteos")
+def eliminar_conteo(
+
+        id_zona:int,
+        id_producto:int,
+
+        session:Session=Depends(get_session)
+
+):
+
+
+    detalle = session.exec(
+
+        select(ConteoZonaDetalle)
+
+        .where(
+            ConteoZonaDetalle.id_zona==id_zona
+        )
+
+        .where(
+            ConteoZonaDetalle.id_producto==id_producto
+        )
+
+    ).first()
+
+
+    if not detalle:
+        raise HTTPException(404,"Conteo no encontrado")
+
+
+    session.delete(detalle)
+
+    session.commit()
+
+
+    return {
+        "status":"ok"
+    }
+
+
+
+
 # -----------------
 # Consolidación + Export
 # -----------------
