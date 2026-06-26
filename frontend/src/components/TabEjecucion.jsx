@@ -4,10 +4,51 @@ import { api } from '../lib/api';
 import { Html5Qrcode, Html5QrcodeSupportedFormats } from "html5-qrcode";
 
 export default function TabEjecucion() {
+
+  // Helper: exporta Excel por zona activa usando xlsx ya integrado en TabAuditoria
+  const exportarZonaExcel = async (zonaId, zonaNombre) => {
+    // Lazy import para no tocar dependencias globales
+    const XLSX = await import('xlsx');
+
+    const items = Array.isArray(itemsZona) ? itemsZona : [];
+    const filas = (items ?? []).map((it) => {
+      const codigo = it.codigo_barras ?? it.codigo_barras_clean ?? '—';
+      const referencia = it.referencia ?? '—';
+      const nombre = it.nombre ?? it.producto_nombre ?? '—';
+      const cantidad = it.cantidad_fisica_contada ?? it.cantidad ?? 0;
+      const operario = it.operario ?? it.responsable ?? it.usuario ?? '—';
+
+      return {
+        'Código de Barras / Referencia': `${codigo} / ${referencia}`,
+        'Descripción / Nombre del Producto': nombre,
+        'Cantidad Física Contada': cantidad,
+        'Operario / Responsable': operario,
+        'Zona ID': zonaId,
+        'Zona': zonaNombre ?? '',
+      };
+    });
+
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.json_to_sheet(filas);
+
+    // Anchos simples
+    if (filas.length > 0) {
+      const maxAnchos = Object.keys(filas[0]).map((key) => ({
+        wch: Math.max(key.length, ...filas.map((f) => String(f[key] ?? '').length)) + 3,
+      }));
+      ws['!cols'] = maxAnchos;
+    }
+
+    XLSX.utils.book_append_sheet(wb, ws, 'Zona');
+    const fechaHoy = new Date().toISOString().slice(0, 10);
+    XLSX.writeFile(wb, `Zona_${zonaId}_${fechaHoy}.xlsx`);
+  };
   const [backendError, setBackendError] = useState('');
   const [idMadre, setIdMadre] = useState('');
   const [zonaNombre, setZonaNombre] = useState('Zona 01 - Pasillo A');
+  const [zonaActivaNombre, setZonaActivaNombre] = useState('');
   const [idZonaActiva, setIdZonaActiva] = useState('');
+
 
   const [tomas, setTomas] = useState([]); 
   const [zonas, setZonas] = useState([]);
@@ -596,6 +637,17 @@ export default function TabEjecucion() {
               <div className="text-sm font-semibold">Listado inferior</div>
               <div className="text-xs text-slate-600">Historial en vivo de conteos por zona</div>
             </div>
+
+            {itemsZona && itemsZona.length > 0 && (
+              <button
+                type="button"
+                className="px-2.5 py-1 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-lg text-xs font-semibold hover:bg-emerald-100 transition-colors"
+                onClick={() => exportarZonaExcel(idZonaActiva, (zonaActivaNombre && String(zonaActivaNombre).trim()) || zonaNombre || 'Zona')}
+
+              >
+                📊 Exportar Zona
+              </button>
+            )}
 
             <button
               type="button"
