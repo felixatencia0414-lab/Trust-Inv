@@ -50,20 +50,23 @@ def crear_subcategoria(payload: dict, session: Session = Depends(get_session)) -
 
     existente = session.exec(
         select(SubCategoria).where(
-            SubCategoria.id_categoria == categoria.id,
+            SubCategoria.categoria_id == categoria.id,
             SubCategoria.nombre == nombre,
         )
     ).first()
+
+
 
     if existente:
         return {
             "status": "ok",
             "id_subcategoria": existente.id,
-            "id_categoria": existente.id_categoria,
+            "id_categoria": existente.categoria_id,
             "nombre": existente.nombre,
         }
 
-    sub = SubCategoria(id_categoria=categoria.id, nombre=nombre)
+
+    sub = SubCategoria(categoria_id=categoria.id, nombre=nombre)
     session.add(sub)
     session.commit()
     session.refresh(sub)
@@ -71,7 +74,7 @@ def crear_subcategoria(payload: dict, session: Session = Depends(get_session)) -
     return {
         "status": "ok",
         "id_subcategoria": sub.id,
-        "id_categoria": sub.id_categoria,
+        "id_categoria": sub.categoria_id,
         "nombre": sub.nombre,
     }
 

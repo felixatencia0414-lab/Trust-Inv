@@ -2,11 +2,8 @@ import React, { useEffect, useMemo, useState } from 'react';
 
 import TabsMobile from './components/TabsMobile';
 import TreeView from './components/TreeView';
-import {
-  fetchProductosTree,
-  importarInventarioExcel,
-  importarMaestroExcel,
-} from './lib/api';
+import { api, fetchProductosTree, importarInventarioExcel, importarMaestroExcel } from './lib/api';
+
 
 import TabEjecucion from './components/TabEjecucion';
 
@@ -166,31 +163,370 @@ function ExampleJsonEditor({ title, value, onChange }) {
 }
 
 function TabMaestros() {
-  const [tree, setTree] = useState(() => normalizeTreeForTreeView(MOCK_TIPO_CATEGORIAS));
+  const [tree, setTree] = useState(() => []);
+
   const [backendMsg, setBackendMsg] = useState('Cargando...');
   const [loadingTree, setLoadingTree] = useState(false);
 
   const [archivoMaestro, setArchivoMaestro] = useState(null);
   const [archivoInventario, setArchivoInventario] = useState(null);
-  
+
   // Estados de carga independientes por fase
   const [importandoMaestro, setImportandoMaestro] = useState(false);
   const [importandoInventario, setImportandoInventario] = useState(false);
 
+  // ---------------------------
+  // FUNCIONALIDAD 1: Nuevo Producto (UI local)
+  // ---------------------------
+  const [showModalProducto, setShowModalProducto] = useState(false);
+  const [productoForm, setProductoForm] = useState({
+    codigo_barras: '',
+    nombre: '',
+    referencia: '',
+    categoria: '',
+    subcategoria: '',
+    costo_unitario: 0,
+    stock_teorico: 0,
+  });
+
+  const [productoFormErrors, setProductoFormErrors] = useState({
+    codigo_barras: '',
+    nombre: '',
+    referencia: '',
+    categoria: '',
+    subcategoria: '',
+    costo_unitario: '',
+    stock_teorico: '',
+  });
+
+  // ---------------------------
+  // FUNCIONALIDAD 2: Categoría / Subcategoría (UI local)
+  // ---------------------------
+  const [showModalCategoria, setShowModalCategoria] = useState(false);
+  const [categoriaForm, setCategoriaForm] = useState({
+    nombre: '',
+  });
+
+  const [showModalSubcategoria, setShowModalSubcategoria] = useState(false);
+  const [subcategoriaForm, setSubcategoriaForm] = useState({
+    nombre: '',
+    categoriaPadre: '',
+  });
+
+  const allCategoriasFromTree = useMemo(() => {
+    const cats = new Set();
+    for (const cat of tree ?? []) {
+      if (cat?.nombre) cats.add(String(cat.nombre).trim());
+    }
+    return Array.from(cats);
+  }, [tree]);
+
+  const subcategoriasFromCategoria = useMemo(() => {
+    const catName = String(productoForm.categoria ?? '').trim();
+    const found = (tree ?? []).find((c) => String(c.nombre ?? '').trim() === catName);
+    return (found?.subcategorias ?? []).map((s) => String(s.nombre ?? '').trim());
+  }, [tree, productoForm.categoria]);
+
+  const resetProductoForm = () => {
+    setProductoForm({
+      codigo_barras: '',
+      nombre: '',
+      referencia: '',
+      categoria: '',
+      subcategoria: '',
+      costo_unitario: 0,
+      stock_teorico: 0,
+    });
+    setProductoFormErrors({
+      codigo_barras: '',
+      nombre: '',
+      referencia: '',
+      categoria: '',
+      subcategoria: '',
+      costo_unitario: '',
+      stock_teorico: '',
+    });
+  };
+
+  const closeProductoModal = () => {
+    setShowModalProducto(false);
+    resetProductoForm();
+  };
+
+  const openProductoModal = () => {
+    resetProductoForm();
+    setShowModalProducto(true);
+  };
+
+  const openCategoriaModal = () => {
+    setCategoriaForm({ nombre: '' });
+    setShowModalCategoria(true);
+  };
+
+  const closeCategoriaModal = () => {
+    setShowModalCategoria(false);
+    setCategoriaForm({ nombre: '' });
+  };
+
+  const categoriasDisponibles = useMemo(() => {
+    return (tree ?? []).map((cat) => ({
+      id: cat.id_categoria,
+      nombre: cat.nombre,
+    }));
+  }, [tree]);
+
+  const openSubcategoriaModal = () => {
+    setSubcategoriaForm({
+      nombre: '',
+      categoriaPadre: '',
+    });
+    setShowModalSubcategoria(true);
+  };
+
+  const closeSubcategoriaModal = () => {
+    setShowModalSubcategoria(false);
+    setSubcategoriaForm({ nombre: '', categoriaPadre: '' });
+  };
+
+  // Helpers de Validación
+  const parseNumero = (v) => {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  };
+
+  const normalizeProducto = () => {
+    return {
+      codigo_barras: String(productoForm.codigo_barras ?? '').trim(),
+      nombre: String(productoForm.nombre ?? '').trim(),
+      referencia: String(productoForm.referencia ?? '').trim(),
+      categoria: String(productoForm.categoria ?? '').trim(),
+      subcategoria: String(productoForm.subcategoria ?? '').trim(),
+      costo_unitario: parseNumero(productoForm.costo_unitario) ?? 0,
+      stock_teorico: parseNumero(productoForm.stock_teorico) ?? 0,
+    };
+  };
+
+  const validateProducto = () => {
+    const p = normalizeProducto();
+    const errors = {
+      codigo_barras: '',
+      nombre: '',
+      referencia: '',
+      categoria: '',
+      subcategoria: '',
+      costo_unitario: '',
+      stock_teorico: '',
+    };
+
+    if (!p.codigo_barras) errors.codigo_barras = 'Código es obligatorio';
+    if (!p.nombre) errors.nombre = 'Nombre es obligatorio';
+    if (!p.referencia) errors.referencia = 'Referencia es obligatoria';
+    if (!p.categoria) errors.categoria = 'Categoría es obligatoria';
+    if (!p.subcategoria) errors.subcategoria = 'Subcategoría es obligatoria';
+
+    if (productoForm.costo_unitario === '' || parseNumero(productoForm.costo_unitario) === null) {
+      errors.costo_unitario = 'Costo y stock deben ser numéricos';
+    }
+    if (productoForm.stock_teorico === '' || parseNumero(productoForm.stock_teorico) === null) {
+      errors.stock_teorico = 'Costo y stock deben ser numéricos';
+    }
+
+    setProductoFormErrors(errors);
+
+    return Object.values(errors).every((v) => !v);
+  };
+
+  const onCreateProduct = async (producto) => {
+    const payload = {
+      codigo_barras: producto.codigo_barras,
+      nombre: producto.nombre,
+      referencia: producto.referencia,
+      id_subcategoria: producto.id_subcategoria,
+      costo_unitario: producto.costo_unitario,
+      stock_teorico: producto.stock_teorico,
+    };
+
+    await api.post('/api/productos', payload);
+  };
+
+  const handleCreateProduct = async () => {
+    if (!validateProducto()) return;
+    const p = normalizeProducto();
+
+    // Resolver id_subcategoria desde el árbol (GET /api/productos/tree)
+    const cat = (tree ?? []).find((c) => String(c.nombre ?? '').trim() === String(p.categoria ?? '').trim());
+    const sub = (cat?.subcategorias ?? []).find((s) => String(s.nombre ?? '').trim() === String(p.subcategoria ?? '').trim());
+
+    const id_subcategoria = sub?.id_subcategoria ?? sub?.id_subcategoria ?? null;
+    if (!id_subcategoria) {
+      // si no viene el id en el árbol, reconsultar una vez
+      await recargarTree();
+      const cat2 = (tree ?? []).find((c) => String(c.nombre ?? '').trim() === String(p.categoria ?? '').trim());
+      const sub2 = (cat2?.subcategorias ?? []).find((s) => String(s.nombre ?? '').trim() === String(p.subcategoria ?? '').trim());
+      if (!sub2?.id_subcategoria) return;
+      await onCreateProduct({
+        codigo_barras: p.codigo_barras,
+        nombre: p.nombre,
+        referencia: p.referencia,
+        id_subcategoria: sub2.id_subcategoria,
+        costo_unitario: p.costo_unitario,
+        stock_teorico: p.stock_teorico,
+      });
+    } else {
+      await onCreateProduct({
+        codigo_barras: p.codigo_barras,
+        nombre: p.nombre,
+        referencia: p.referencia,
+        id_subcategoria,
+        costo_unitario: p.costo_unitario,
+        stock_teorico: p.stock_teorico,
+      });
+    }
+
+    closeProductoModal();
+    await recargarTree();
+    setProductoForm((prev) => ({
+      ...prev,
+      categoria: p.categoria,
+      subcategoria: p.subcategoria,
+    }));
+  };
+
+
+  const onCreateCategory = async (nombre) => {
+    const nombreClean = String(nombre ?? '').trim();
+    if (!nombreClean) return;
+
+    console.log('Creando categoria', nombreClean);
+
+    const r = await api.post(
+      '/api/categorias',
+      {
+        nombre: nombreClean,
+      }
+    );
+
+    console.log('Respuesta backend', r.data);
+    return r.data;
+  };
+
+
+  const handleCreateCategory = async () => {
+    const nombre = categoriaForm.nombre.trim();
+
+    if (!nombre) return;
+
+    try {
+      await onCreateCategory(nombre);
+
+      await recargarTree();
+
+      setProductoForm((prev) => ({
+        ...prev,
+        categoria: nombre,
+        subcategoria: '',
+      }));
+
+      closeCategoriaModal();
+
+      console.log('Categoria creada');
+    } catch (err) {
+      console.error(err);
+      alert('Error creando categoria');
+    }
+  };
+
+
+  const onCreateSubcategory = async (id_categoria, nombre) => {
+    console.log("INICIO");
+
+    console.log("NOMBRE", nombre);
+
+    const nombreClean = String(nombre ?? '').trim();
+    if (!id_categoria || !nombreClean) return;
+
+    const resp = await api.post('/api/subcategorias', {
+      id_categoria,
+      nombre: nombreClean,
+    });
+
+    console.log("RESP", resp.data);
+
+    return resp;
+  };
+
+  const handleCreateSubcategory = async () => {
+    const nombre = String(subcategoriaForm.nombre ?? '').trim();
+    const categoriaPadreIdStr = String(subcategoriaForm.categoriaPadre ?? '').trim();
+
+    if (!nombre || !categoriaPadreIdStr) return;
+
+    console.log("INICIO");
+    console.log("NOMBRE", nombre);
+    console.log("CATEGORIA", categoriaPadreIdStr);
+
+    const resolvedId = Number(categoriaPadreIdStr);
+    if (!resolvedId) return;
+
+    console.log("POST SUB");
+    console.log(resolvedId, nombre);
+
+    try {
+      const resp = await onCreateSubcategory(resolvedId, nombre);
+      console.log("RESP SUB", resp?.data);
+
+      if (resp?.data?.status === 'ok') {
+        const refreshed = await fetchProductosTree();
+        console.log("TREE", refreshed);
+
+        setTree(refreshed?.data || []);
+
+        closeSubcategoriaModal();
+        console.log("MODAL CERRADO");
+
+        setSubcategoriaForm({
+          nombre: '',
+          categoriaPadre: '',
+        });
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+
+
+
+  // Modal generic close handlers
+  const onBackdropProducto = (e) => {
+    if (e.target === e.currentTarget) closeProductoModal();
+  };
+
+  const onBackdropCategoria = (e) => {
+    if (e.target === e.currentTarget) closeCategoriaModal();
+  };
+
+  const onBackdropSubcategoria = (e) => {
+    if (e.target === e.currentTarget) closeSubcategoriaModal();
+  };
+
+
   const recargarTree = async () => {
     try {
       setLoadingTree(true);
+
       const data = await fetchProductosTree();
-      const rawTree = data?.data ?? [];
-      setTree(rawTree);
+      console.log('TREE', data);
+
+      setTree(data?.data || []);
       setBackendMsg('Datos sincronizados con PostgreSQL');
     } catch (e) {
       console.error(e);
-      setBackendMsg('Error cargando /api/productos/tree');
     } finally {
       setLoadingTree(false);
     }
   };
+
 
   useEffect(() => {
     recargarTree();
@@ -250,6 +586,316 @@ function TabMaestros() {
       </div>
 
       <div className="grid grid-cols-1 gap-3">
+        <div className="flex gap-2 mb-3">
+          <button
+            type="button"
+            className="bg-indigo-600 hover:bg-indigo-700 rounded-lg text-white px-4 py-2 shadow-sm text-sm font-semibold"
+            onClick={openProductoModal}
+          >
+            + Nuevo Producto
+          </button>
+          <button
+            type="button"
+            className="bg-slate-700 hover:bg-slate-800 rounded-lg text-white px-4 py-2 shadow-sm text-sm font-semibold"
+            onClick={openCategoriaModal}
+          >
+            + Categoría
+          </button>
+        </div>
+
+
+        {/* MODAL Producto */}
+        {showModalProducto && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40"
+            onMouseDown={onBackdropProducto}
+          >
+            <div className="bg-white rounded-xl shadow-2xl max-w-lg w-full border border-slate-200">
+              <div className="p-3 bg-indigo-600 text-white rounded-t-xl flex items-center justify-between">
+                <h3 className="text-sm font-bold">Nuevo Producto</h3>
+                <button
+                  type="button"
+                  className="text-white hover:text-slate-200 text-lg font-bold px-2"
+                  onClick={closeProductoModal}
+                >
+                  ✕
+                </button>
+              </div>
+
+              <div className="p-4 space-y-3">
+                <div className="grid grid-cols-1 gap-2">
+                  <div>
+                    <label className="text-xs text-slate-500">Código de Barras *</label>
+                    <input
+                      className="mt-1 w-full rounded-lg border px-3 py-2 text-sm"
+                      value={productoForm.codigo_barras}
+                      onChange={(e) => setProductoForm((prev) => ({ ...prev, codigo_barras: e.target.value }))}
+                    />
+                    {productoFormErrors.codigo_barras && (
+                      <div className="text-[11px] text-red-600 mt-1">{productoFormErrors.codigo_barras}</div>
+                    )}
+                  </div>
+
+                  <div>
+                    <label className="text-xs text-slate-500">Nombre Producto *</label>
+                    <input
+                      className="mt-1 w-full rounded-lg border px-3 py-2 text-sm"
+                      value={productoForm.nombre}
+                      onChange={(e) => setProductoForm((prev) => ({ ...prev, nombre: e.target.value }))}
+                    />
+                    {productoFormErrors.nombre && (
+                      <div className="text-[11px] text-red-600 mt-1">{productoFormErrors.nombre}</div>
+                    )}
+                  </div>
+
+                  <div>
+                    <label className="text-xs text-slate-500">Referencia *</label>
+                    <input
+                      className="mt-1 w-full rounded-lg border px-3 py-2 text-sm"
+                      value={productoForm.referencia}
+                      onChange={(e) => setProductoForm((prev) => ({ ...prev, referencia: e.target.value }))}
+                    />
+                    {productoFormErrors.referencia && (
+                      <div className="text-[11px] text-red-600 mt-1">{productoFormErrors.referencia}</div>
+                    )}
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-2">
+                    <div>
+                      <div className="flex items-center justify-between gap-2">
+                        <label className="text-xs text-slate-500">Categoría *</label>
+                        <button
+                          type="button"
+                          className="text-indigo-600 hover:text-indigo-700 text-sm"
+                          onClick={openCategoriaModal}
+                        >
+                          + Categoría
+                        </button>
+                      </div>
+                      <select
+                        className="mt-1 w-full rounded-lg border px-3 py-2 text-sm bg-white"
+                        value={productoForm.categoria}
+                        onChange={(e) =>
+                          setProductoForm((prev) => ({
+                            ...prev,
+                            categoria: e.target.value,
+                            subcategoria: '',
+                          }))
+                        }
+                      >
+                        <option value="">-- Seleccionar --</option>
+                        {allCategoriasFromTree.map((c) => (
+                          <option key={c} value={c}>
+                            {c}
+                          </option>
+                        ))}
+                      </select>
+                      {productoFormErrors.categoria && (
+                        <div className="text-[11px] text-red-600 mt-1">{productoFormErrors.categoria}</div>
+                      )}
+                    </div>
+
+                    <div>
+                      <div className="flex items-center justify-between gap-2">
+                        <label className="text-xs text-slate-500">Subcategoría *</label>
+                        <button
+                          type="button"
+                          className="text-indigo-600 hover:text-indigo-700 text-sm"
+                          onClick={openSubcategoriaModal}
+                        >
+                          + Subcategoría
+                        </button>
+                      </div>
+                      <select
+                        className="mt-1 w-full rounded-lg border px-3 py-2 text-sm bg-white"
+                        value={productoForm.subcategoria}
+                        onChange={(e) => setProductoForm((prev) => ({ ...prev, subcategoria: e.target.value }))}
+                        disabled={!productoForm.categoria}
+                      >
+                        <option value="">-- Seleccionar --</option>
+                        {subcategoriasFromCategoria.map((s) => (
+                          <option key={s} value={s}>
+                            {s}
+                          </option>
+                        ))}
+                      </select>
+                      {productoFormErrors.subcategoria && (
+                        <div className="text-[11px] text-red-600 mt-1">{productoFormErrors.subcategoria}</div>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="text-xs text-slate-500">Costo Unitario *</label>
+                      <input
+                        type="number"
+                        className="mt-1 w-full rounded-lg border px-3 py-2 text-sm"
+                        value={productoForm.costo_unitario}
+                        onChange={(e) => setProductoForm((prev) => ({ ...prev, costo_unitario: e.target.value }))}
+                      />
+                      {productoFormErrors.costo_unitario && (
+                        <div className="text-[11px] text-red-600 mt-1">{productoFormErrors.costo_unitario}</div>
+                      )}
+                    </div>
+
+                    <div>
+                      <label className="text-xs text-slate-500">Stock Inicial *</label>
+                      <input
+                        type="number"
+                        className="mt-1 w-full rounded-lg border px-3 py-2 text-sm"
+                        value={productoForm.stock_teorico}
+                        onChange={(e) => setProductoForm((prev) => ({ ...prev, stock_teorico: e.target.value }))}
+                      />
+                      {productoFormErrors.stock_teorico && (
+                        <div className="text-[11px] text-red-600 mt-1">{productoFormErrors.stock_teorico}</div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="pt-2 flex items-center justify-end gap-2">
+                  <button
+                    type="button"
+                    className="px-3 py-2 rounded-lg border border-slate-300 text-sm font-semibold text-slate-700"
+                    onClick={closeProductoModal}
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="button"
+                    className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold shadow-sm"
+                    onClick={handleCreateProduct}
+                  >
+                    Guardar Producto
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* MODAL Categoría */}
+        {showModalCategoria && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40"
+            onMouseDown={onBackdropCategoria}
+          >
+            <div className="bg-white rounded-xl shadow-2xl max-w-md w-full border border-slate-200">
+              <div className="p-3 bg-indigo-600 text-white rounded-t-xl flex items-center justify-between">
+                <h3 className="text-sm font-bold">Nueva Categoría</h3>
+                <button
+                  type="button"
+                  className="text-white hover:text-slate-200 text-lg font-bold px-2"
+                  onClick={closeCategoriaModal}
+                >
+                  ✕
+                </button>
+              </div>
+
+              <div className="p-4 space-y-3">
+                <div>
+                  <label className="text-xs text-slate-500">Nombre Categoría *</label>
+                  <input
+                    className="mt-1 w-full rounded-lg border px-3 py-2 text-sm"
+                    value={categoriaForm.nombre}
+                    onChange={(e) => setCategoriaForm({ nombre: e.target.value })}
+                    autoFocus
+                  />
+                </div>
+
+                <div className="flex items-center justify-end gap-2">
+                  <button
+                    type="button"
+                    className="px-3 py-2 rounded-lg border border-slate-300 text-sm font-semibold text-slate-700"
+                    onClick={closeCategoriaModal}
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="button"
+                    className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold shadow-sm"
+                    onClick={handleCreateCategory}
+                  >
+                    Guardar
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* MODAL Subcategoría */}
+        {showModalSubcategoria && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40"
+            onMouseDown={onBackdropSubcategoria}
+          >
+            <div className="bg-white rounded-xl shadow-2xl max-w-md w-full border border-slate-200">
+              <div className="p-3 bg-indigo-600 text-white rounded-t-xl flex items-center justify-between">
+                <h3 className="text-sm font-bold">Nueva Subcategoría</h3>
+                <button
+                  type="button"
+                  className="text-white hover:text-slate-200 text-lg font-bold px-2"
+                  onClick={closeSubcategoriaModal}
+                >
+                  ✕
+                </button>
+              </div>
+
+              <div className="p-4 space-y-3">
+                <div>
+                  <label className="text-xs text-slate-500">Nombre *</label>
+                  <input
+                    className="mt-1 w-full rounded-lg border px-3 py-2 text-sm"
+                    value={subcategoriaForm.nombre}
+                    onChange={(e) => setSubcategoriaForm((prev) => ({ ...prev, nombre: e.target.value }))}
+                    autoFocus
+                  />
+                </div>
+
+                <div>
+                  <label className="text-xs text-slate-500">Categoría padre</label>
+                  <select
+                    className="mt-1 w-full rounded-lg border px-3 py-2 text-sm bg-white"
+                    value={subcategoriaForm.categoriaPadre}
+                    onChange={(e) =>
+                      setSubcategoriaForm((prev) => ({
+                        ...prev,
+                        categoriaPadre: e.target.value,
+                      }))
+                    }
+                  >
+                    <option value="">Seleccione</option>
+                    {categoriasDisponibles.map((cat) => (
+                      <option key={cat.id} value={cat.id}>
+                        {cat.nombre}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="flex items-center justify-end gap-2">
+                  <button
+                    type="button"
+                    className="px-3 py-2 rounded-lg border border-slate-300 text-sm font-semibold text-slate-700"
+                    onClick={closeSubcategoriaModal}
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="button"
+                    className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold shadow-sm"
+                    onClick={handleCreateSubcategory}
+                  >
+                    Guardar
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Tarjeta de Importación por Fases */}
         <div className="rounded-xl border p-4 bg-white shadow-sm">
           <div className="text-sm font-semibold text-slate-800">Importación de Datos (Flujo Secuencial)</div>

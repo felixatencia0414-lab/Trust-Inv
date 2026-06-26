@@ -148,6 +148,85 @@ def importar_maestro(
     return {"status": "ok"}
 
 
+@router.post("/productos", status_code=201)
+def crear_producto(
+    payload: dict,
+    session: Session = Depends(get_session),
+):
+    # Validaciones básicas (mínima intervención)
+    codigo_barras = str(payload.get("codigo_barras") or "").strip()
+    nombre = str(payload.get("nombre") or "").strip()
+    referencia = payload.get("referencia")
+    referencia = (str(referencia).strip() if referencia is not None else None)
+    id_subcategoria = payload.get("id_subcategoria")
+    if id_subcategoria is None:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail="id_subcategoria es requerido")
+
+    try:
+        id_subcategoria = int(id_subcategoria)
+    except Exception:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail="id_subcategoria debe ser int")
+
+    if not codigo_barras:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail="codigo_barras es requerido")
+    if not nombre:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail="nombre es requerido")
+
+    # Validar duplicado
+    prod_exist = session.exec(select(Producto).where(Producto.codigo_barras == codigo_barras)).first()
+    if prod_exist:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=409, detail="Producto ya existe")
+
+    # Obtener campos numéricos
+    costo_unitario = payload.get("costo_unitario")
+    stock_teorico = payload.get("stock_teorico")
+
+    try:
+        costo_unitario_f = float(costo_unitario)
+    except Exception:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail="costo_unitario debe ser numérico")
+
+    try:
+        stock_teorico_i = int(stock_teorico)
+    except Exception:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail="stock_teorico debe ser int")
+
+    # Validar subcategoría
+    sub = session.exec(select(SubCategoria).where(SubCategoria.id == id_subcategoria)).first()
+    if not sub:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="id_subcategoria no existe")
+
+    producto = Producto(
+        codigo_barras=codigo_barras,
+        nombre=nombre,
+        referencia=referencia,
+        subcategoria_id=id_subcategoria,
+    )
+    session.add(producto)
+    session.commit()
+    session.refresh(producto)
+
+    inv = InventarioValorizado(
+        id_producto=producto.id,
+        costo_unitario=costo_unitario_f,
+        cantidad_sistema=stock_teorico_i,
+        costo_total_sistema=float(costo_unitario_f) * float(stock_teorico_i),
+    )
+    session.add(inv)
+    session.commit()
+    session.refresh(producto)
+
+    return {"status": "ok", "id_producto": producto.id}
+
+
 @router.post("/importar-inventario")
 def importar_inventario(
     archivo: UploadFile = File(...),

@@ -4,86 +4,86 @@ from fastapi import APIRouter, Depends
 from sqlmodel import Session, select
 
 from app.database import get_session
-from app.models import Categoria, Producto, SubCategoria
-from sqlmodel import text  # <-- Asegúrate de importar 'text' arriba en tu archivo
-
+from app.models import Categoria, InventarioValorizado, Producto, SubCategoria
 
 router = APIRouter(prefix="/api", tags=["productos"])
 
 
-
 @router.get("/productos/tree")
 def productos_tree(session: Session = Depends(get_session)) -> dict:
-    """Devuelve categorías -> subcategorías -> productos (anidado) con costos e inventario real."""
+    """Devuelve categorías -> subcategorías -> productos (anidado) con costos e inventario real.
 
-    # Consulta unificada en SQL crudo usando text() para integrar el LEFT JOIN dinámico
-    query = text("""
-        SELECT 
-            c.id AS cat_id,
-            c.nombre AS cat_nombre,
-            s.id AS sub_id,
-            s.nombre AS sub_nombre,
-            p.id AS prod_id,
-            p.codigo_barras AS codigo_barras,
-            p.referencia AS referencia,
-            p.nombre AS prod_nombre,
-            COALESCE(iv.costo_unitario, 0) AS costo_unitario,
-            COALESCE(iv.cantidad_sistema, 0) AS stock_teorico 
-        FROM producto p
-        LEFT JOIN subcategoria s ON p.subcategoria_id = s.id
-        LEFT JOIN categoria c ON s.categoria_id = c.id
-        LEFT JOIN (
-            SELECT DISTINCT ON (id_producto) id_producto, costo_unitario, cantidad_sistema
-            FROM inventariovalorizado
-            ORDER BY id_producto, fecha_carga DESC
-        ) iv ON p.id = iv.id_producto
-        ORDER BY c.nombre, s.nombre, p.nombre;
-    """)
+    Reglas:
+    - Devuelve SIEMPRE categorías, incluso si no tienen subcategorías.
+    - Devuelve SIEMPRE subcategorías, incluso si no tienen productos.
+    """
 
-    rows = session.exec(query).all()
 
-    tree_by_cat: dict[int, dict] = {}
-    tree_by_sub: dict[tuple[int, int], dict] = {}
 
-    for r in rows:
-        # Validamos que el producto pertenezca a una categoría y subcategoría antes de agrupar
-        if r.cat_id is None or r.sub_id is None:
-            continue
-            
-        cat_id = int(r.cat_id)
-        sub_id = int(r.sub_id)
-        key_sub = (cat_id, sub_id)
+    # Paso 1) Categorías
+    categorias = session.exec(select(Categoria).order_by(Categoria.nombre)).all()
 
-        if cat_id not in tree_by_cat:
-            tree_by_cat[cat_id] = {
-                "nombre": r.cat_nombre,
-                "subcategorias": [],
-            }
+    data: list[dict] = []
 
-        if key_sub not in tree_by_sub:
+    # Paso 2) Subcategorías por categoría (SIEMPRE, aunque no tengan productos)
+    for categoria in categorias:
+        subcategorias = session.exec(
+            select(SubCategoria)
+            .where(SubCategoria.categoria_id == categoria.id)
+            .order_by(SubCategoria.nombre)
+        ).all()
+
+        node_categoria = {
+            "id_categoria": int(categoria.id),
+            "nombre": categoria.nombre,
+            "subcategorias": [],
+        }
+
+        # Paso 3) Productos por subcategoría (SIEMPRE, aunque no tengan productos)
+        for sub in subcategorias:
+            productos = session.exec(
+                select(Producto)
+                .where(Producto.subcategoria_id == sub.id)
+                .order_by(Producto.nombre)
+            ).all()
+
             node_sub = {
-                "nombre": r.sub_nombre,
+                "id_subcategoria": int(sub.id),
+                "nombre": sub.nombre,
                 "productos": [],
             }
-            tree_by_cat[cat_id]["subcategorias"].append(node_sub)
-            tree_by_sub[key_sub] = node_sub
 
-        tree_by_sub[key_sub]["productos"].append(
-            {
-                "id_producto": int(r.prod_id),
-                "codigo_barras": r.codigo_barras,
-                "referencia": r.referencia,
-                "nombre": r.prod_nombre,
-                # MAPEAMOS LOS VALORES REALES DE LA BASE DE DATOS AQUÍ:
-                "costo_unitario": float(r.costo_unitario),
-                "stock_teorico": int(r.stock_teorico),
-                # campos opcionales para auditoría/TreeView:
-                "valor_diferencia": 0,
-                "diferencia_cantidad": 0,
-                "valor_diferencia_simple": 0,
-                "valor_diferencia_total": 0,
-            }
-        )
+            # Paso 4) Inventario por producto
+            for prod in productos:
+                inv = session.exec(
+                    select(InventarioValorizado).where(
+                        InventarioValorizado.id_producto == prod.id
+                    )
+                ).first()
 
-    data = [tree_by_cat[k] for k in sorted(tree_by_cat.keys())]
+                costo_unitario = float(inv.costo_unitario) if inv and inv.costo_unitario is not None else 0.0
+                stock_teorico = int(inv.cantidad_sistema) if inv and inv.cantidad_sistema is not None else 0
+
+                node_sub["productos"].append(
+                    {
+                        "id_producto": int(prod.id),
+                        "codigo_barras": prod.codigo_barras,
+                        "referencia": prod.referencia,
+                        "nombre": prod.nombre,
+                        "costo_unitario": costo_unitario,
+                        "stock_teorico": stock_teorico,
+                        "valor_diferencia": 0,
+                        "diferencia_cantidad": 0,
+                        "valor_diferencia_simple": 0,
+                        "valor_diferencia_total": 0,
+                    }
+                )
+
+            # IMPORTANTE: siempre agregar node_sub, aunque productos sea []
+            node_categoria["subcategorias"].append(node_sub)
+
+        data.append(node_categoria)
+
     return {"status": "ok", "data": data}
+
+
